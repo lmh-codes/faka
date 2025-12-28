@@ -1,0 +1,128 @@
+version: '3.8'
+
+services:
+  # MySQL 数据库（优化配置，适合 1核1G）
+  mysql:
+    image: mysql:8.0
+    container_name: card-shop-mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-card_shop_2024}
+      MYSQL_DATABASE: ${DB_NAME:-card_shop}
+      MYSQL_USER: ${DB_USER:-cardshop}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-card_shop_2024}
+      TZ: Asia/Shanghai
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./server/database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ./server/database/test-data.sql:/docker-entrypoint-initdb.d/02-test-data.sql
+    ports:
+      - "3306:3306"
+    command: >
+      --default-authentication-plugin=mysql_native_password
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --max_connections=100
+      --innodb_buffer_pool_size=128M
+      --innodb_log_file_size=32M
+      --innodb_flush_log_at_trx_commit=2
+      --innodb_flush_method=O_DIRECT
+      --query_cache_size=0
+      --query_cache_type=0
+      --performance_schema=OFF
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_PASSWORD:-card_shop_2024}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+    networks:
+      - card-shop-network
+
+  # 应用服务（优化配置）
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: card-shop-app
+    restart: always
+    environment:
+      DB_HOST: mysql
+      DB_USER: ${DB_USER:-cardshop}
+      DB_PASSWORD: ${DB_PASSWORD:-card_shop_2024}
+      DB_NAME: ${DB_NAME:-card_shop}
+      JWT_SECRET: ${JWT_SECRET:-your_jwt_secret_key_change_in_production}
+      PORT: 3000
+      NODE_ENV: production
+      NODE_OPTIONS: "--max-old-space-size=256"
+      # 易支付配置
+      EPAY_API_URL: ${EPAY_API_URL:-}
+      EPAY_PID: ${EPAY_PID:-}
+      EPAY_KEY: ${EPAY_KEY:-}
+      # 独角数卡配置
+      DUJIAO_API_URL: ${DUJIAO_API_URL:-}
+      DUJIAO_API_KEY: ${DUJIAO_API_KEY:-}
+      # 鲸发卡配置
+      JINGFAKA_API_URL: ${JINGFAKA_API_URL:-}
+      JINGFAKA_API_KEY: ${JINGFAKA_API_KEY:-}
+      # 发卡平台类型：epay(易支付), dujiao(独角数卡), jingfaka(鲸发卡)
+      CARD_PLATFORM: ${CARD_PLATFORM:-epay}
+      # 分销配置
+      LEVEL1_COMMISSION_RATE: ${LEVEL1_COMMISSION_RATE:-0.10}
+      LEVEL2_COMMISSION_RATE: ${LEVEL2_COMMISSION_RATE:-0.05}
+      MIN_WITHDRAWAL: ${MIN_WITHDRAWAL:-10.00}
+      API_URL: ${API_URL:-http://localhost:3000}
+      CLIENT_URL: ${CLIENT_URL:-http://localhost}
+    ports:
+      - "3000:3000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+        reservations:
+          memory: 192M
+    networks:
+      - card-shop-network
+    volumes:
+      - ./logs:/app/logs
+
+  # Nginx 反向代理（轻量级）
+  nginx:
+    image: nginx:alpine
+    container_name: card-shop-nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./client/dist:/usr/share/nginx/html:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - ./logs/nginx:/var/log/nginx
+    depends_on:
+      - app
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 64M
+    networks:
+      - card-shop-network
+
+volumes:
+  mysql_data:
+    driver: local
+
+networks:
+  card-shop-network:
+    driver: bridge
